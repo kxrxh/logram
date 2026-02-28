@@ -1,0 +1,5 @@
+bot:
+  token: "8629453715:AAEPuJtjtqmODAOlFl74ymjfu9JP750rKCI"
+parser:
+database:
+  path: "bot.db"
