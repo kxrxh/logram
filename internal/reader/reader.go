@@ -127,10 +127,7 @@ func (t *fileTailer) updateSignature(lines []string) {
 		t.signature = nil
 		return
 	}
-	start := len(lines) - t.sigSize
-	if start < 0 {
-		start = 0
-	}
+	start := max(len(lines)-t.sigSize, 0)
 	t.signature = append([]string(nil), lines[start:]...)
 }
 

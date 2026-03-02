@@ -7,7 +7,7 @@ import (
 )
 
 func TestNew_Defaults(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	buf := New(ctx, 5, time.Second)
 
 	if buf.maxSize != 5 {
@@ -22,26 +22,26 @@ func TestNew_Defaults(t *testing.T) {
 }
 
 func TestWithPolicy(t *testing.T) {
-	buf := New(context.Background(), 10, time.Second, WithPolicy(DropOldest))
+	buf := New(t.Context(), 10, time.Second, WithPolicy(DropOldest))
 	if buf.policy != DropOldest {
 		t.Errorf("expected policy DropOldest, got %v", buf.policy)
 	}
 }
 
 func TestBuffer_Policy_DropNew(t *testing.T) {
-	buf := New(context.Background(), 2, time.Hour, WithPolicy(DropNew))
+	buf := New(t.Context(), 2, time.Hour, WithPolicy(DropNew))
 	buf.Start()
 
-	buf.Input() <- "1"
-	buf.Input() <- "2"
-	buf.Input() <- "3" // Should be dropped
+	buf.Input() <- []byte("1")
+	buf.Input() <- []byte("2")
+	buf.Input() <- []byte("3") // Should be dropped
 
 	buf.Stop()
 
-	if (<-buf.Output()) != "1" {
+	if string(<-buf.Output()) != "1" {
 		t.Error("expected 1")
 	}
-	if (<-buf.Output()) != "2" {
+	if string(<-buf.Output()) != "2" {
 		t.Error("expected 2")
 	}
 
@@ -52,34 +52,34 @@ func TestBuffer_Policy_DropNew(t *testing.T) {
 }
 
 func TestBuffer_Policy_DropOldest(t *testing.T) {
-	buf := New(context.Background(), 2, time.Hour, WithPolicy(DropOldest))
+	buf := New(t.Context(), 2, time.Hour, WithPolicy(DropOldest))
 	buf.Start()
 
-	buf.Input() <- "1"
-	buf.Input() <- "2"
-	buf.Input() <- "3" // Should drop "1"
+	buf.Input() <- []byte("1")
+	buf.Input() <- []byte("2")
+	buf.Input() <- []byte("3") // Should drop "1"
 
 	buf.Stop()
 
-	if (<-buf.Output()) != "2" {
+	if string(<-buf.Output()) != "2" {
 		t.Error("expected 2")
 	}
-	if (<-buf.Output()) != "3" {
+	if string(<-buf.Output()) != "3" {
 		t.Error("expected 3")
 	}
 }
 
 func TestBuffer_Policy_BlockOnFull(t *testing.T) {
-	buf := New(context.Background(), 2, time.Hour, WithPolicy(BlockOnFull))
+	buf := New(t.Context(), 2, time.Hour, WithPolicy(BlockOnFull))
 	buf.Start()
 	defer buf.Stop()
 
-	buf.Input() <- "1"
-	buf.Input() <- "2" // Should trigger automatic flush
+	buf.Input() <- []byte("1")
+	buf.Input() <- []byte("2") // Should trigger automatic flush
 
 	select {
 	case m := <-buf.Output():
-		if m != "1" {
+		if string(m) != "1" {
 			t.Errorf("expected 1, got %s", m)
 		}
 	case <-time.After(100 * time.Millisecond):
@@ -89,15 +89,15 @@ func TestBuffer_Policy_BlockOnFull(t *testing.T) {
 
 func TestBuffer_FlushOnInterval(t *testing.T) {
 	interval := 50 * time.Millisecond
-	buf := New(context.Background(), 100, interval)
+	buf := New(t.Context(), 100, interval)
 	buf.Start()
 	defer buf.Stop()
 
-	buf.Input() <- "timed-msg"
+	buf.Input() <- []byte("timed-msg")
 
 	select {
 	case msg := <-buf.Output():
-		if msg != "timed-msg" {
+		if string(msg) != "timed-msg" {
 			t.Errorf("got %s", msg)
 		}
 	case <-time.After(interval * 3):
@@ -106,15 +106,15 @@ func TestBuffer_FlushOnInterval(t *testing.T) {
 }
 
 func TestBuffer_StopDrainsRemaining(t *testing.T) {
-	buf := New(context.Background(), 10, time.Hour)
+	buf := New(t.Context(), 10, time.Hour)
 	buf.Start()
 
-	buf.Input() <- "drain-me"
+	buf.Input() <- []byte("drain-me")
 	buf.Stop()
 
 	select {
 	case msg := <-buf.Output():
-		if msg != "drain-me" {
+		if string(msg) != "drain-me" {
 			t.Errorf("expected drain-me, got %q", msg)
 		}
 	default:
@@ -123,14 +123,14 @@ func TestBuffer_StopDrainsRemaining(t *testing.T) {
 }
 
 func TestBuffer_DoubleStop(t *testing.T) {
-	buf := New(context.Background(), 10, time.Hour)
+	buf := New(t.Context(), 10, time.Hour)
 	buf.Start()
 	buf.Stop()
 	buf.Stop() // Should not panic
 }
 
 func TestBuffer_ContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	buf := New(ctx, 10, time.Hour)
 	buf.Start()
 

@@ -102,7 +102,7 @@ func TestReadFileTail_ContextCancel(t *testing.T) {
 	tmpPath := filepath.Join(tmpDir, "cancel.log")
 	_ = os.WriteFile(tmpPath, []byte("init\n"), 0o644)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	ch := ReadFileTail(ctx, tmpPath)
 
 	time.Sleep(waitInterval)

@@ -1,5 +1,12 @@
 bot:
   token: "8629453715:AAEPuJtjtqmODAOlFl74ymjfu9JP750rKCI"
 parser:
+  rules:
+    - name: "errors"
+      pattern: ".*ERROR.*"
+    - name: "warnings"
+      pattern: ".*WARN.*"
+logs:
+  path: "bot.log"
 database:
   path: "bot.db"

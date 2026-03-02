@@ -18,8 +18,8 @@ type Buffer struct {
 	maxSize       int
 	flushInterval time.Duration
 	policy        BufferPolicy
-	input         chan string
-	output        chan string
+	input         chan []byte
+	output        chan []byte
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
@@ -29,8 +29,8 @@ type Buffer struct {
 type Option func(*Buffer)
 
 func WithPolicy(p BufferPolicy) Option   { return func(b *Buffer) { b.policy = p } }
-func WithInputCh(ch chan string) Option  { return func(b *Buffer) { b.input = ch } }
-func WithOutputCh(ch chan string) Option { return func(b *Buffer) { b.output = ch } }
+func WithInputCh(ch chan []byte) Option  { return func(b *Buffer) { b.input = ch } }
+func WithOutputCh(ch chan []byte) Option { return func(b *Buffer) { b.output = ch } }
 
 func New(ctx context.Context, maxSize int, flushInterval time.Duration, opts ...Option) *Buffer {
 	ctx, cancel := context.WithCancel(ctx)
@@ -38,8 +38,8 @@ func New(ctx context.Context, maxSize int, flushInterval time.Duration, opts ...
 		maxSize:       maxSize,
 		flushInterval: flushInterval,
 		policy:        BlockOnFull,
-		input:         make(chan string, maxSize),
-		output:        make(chan string, maxSize),
+		input:         make(chan []byte, maxSize),
+		output:        make(chan []byte, maxSize),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
@@ -62,15 +62,15 @@ func (b *Buffer) Stop() {
 	})
 }
 
-func (b *Buffer) Input() chan<- string  { return b.input }
-func (b *Buffer) Output() <-chan string { return b.output }
+func (b *Buffer) Input() chan<- []byte  { return b.input }
+func (b *Buffer) Output() <-chan []byte { return b.output }
 
 func (b *Buffer) run() {
 	defer b.wg.Done()
 	ticker := time.NewTicker(b.flushInterval)
 	defer ticker.Stop()
 
-	batch := make([]string, 0, b.maxSize)
+	batch := make([][]byte, 0, b.maxSize)
 
 	for {
 		select {
@@ -132,7 +132,7 @@ func (b *Buffer) run() {
 	}
 }
 
-func (b *Buffer) emit(batch []string, force bool) {
+func (b *Buffer) emit(batch [][]byte, force bool) {
 	for _, msg := range batch {
 		if force {
 			b.output <- msg
