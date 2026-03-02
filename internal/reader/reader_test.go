@@ -35,8 +35,7 @@ func TestReadFileTail_BasicAppend(t *testing.T) {
 
 	_ = os.WriteFile(tmpPath, []byte("old1\nold2\n"), 0o644)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	ch := ReadFileTail(ctx, tmpPath)
 
 	time.Sleep(waitInterval)

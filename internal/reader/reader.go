@@ -4,15 +4,12 @@ import (
 	"bufio"
 	"context"
 	"os"
-	"time"
+	"path/filepath"
 
 	"github.com/fsnotify/fsnotify"
 )
 
-const (
-	debounceDuration = 30 * time.Millisecond
-	signatureSize    = 3
-)
+const signatureSize = 3
 
 func ReadFileTail(ctx context.Context, path string) <-chan []byte {
 	out := make(chan []byte, 200)
@@ -21,7 +18,6 @@ func ReadFileTail(ctx context.Context, path string) <-chan []byte {
 		out:     out,
 		sigSize: signatureSize,
 	}
-
 	go t.run(ctx)
 	return out
 }
@@ -40,41 +36,36 @@ func (t *fileTailer) run(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	defer func() { _ = watcher.Close() }()
+	defer watcher.Close()
 
-	if err := watcher.Add(t.path); err != nil {
+	// Watch the directory, not the file, to handle missing files
+	dir := filepath.Dir(t.path)
+	if err := watcher.Add(dir); err != nil {
 		return
 	}
 
-	if lines := t.readAllLines(); len(lines) > 0 {
+	// Initial check if file exists
+	if _, err := os.Stat(t.path); err == nil {
+		lines := t.readAllLines()
 		t.updateSignature(lines)
 	}
-
-	var timer *time.Timer
-	var timerCh <-chan time.Time
 
 	for {
 		select {
 		case <-ctx.Done():
-			if timer != nil {
-				timer.Stop()
-			}
 			return
-
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return
 			}
-			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-				timer, timerCh = t.resetTimer(timer)
+			// Only process events related to our specific file
+			if filepath.Clean(event.Name) == filepath.Clean(t.path) {
+				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+					t.processUpdate(ctx)
+				}
 			}
-
-		case <-timerCh:
-			timer = nil
-			timerCh = nil
-			t.processUpdate(ctx)
-
 		case <-watcher.Errors:
+			return
 		}
 	}
 }
@@ -86,23 +77,24 @@ func (t *fileTailer) processUpdate(ctx context.Context) {
 	}
 
 	if len(t.signature) == 0 {
+		// New file or first time reading
+		t.emit(ctx, []byte(lines[len(lines)-1]))
 		t.updateSignature(lines)
 		return
 	}
 
 	idx := t.findLastReadIndex(lines)
 	if idx != -1 {
+		// Append new lines
 		for i := idx + 1; i < len(lines); i++ {
 			if !t.emit(ctx, []byte(lines[i])) {
 				return
 			}
 		}
 	} else {
-		if !t.emit(ctx, []byte(lines[len(lines)-1])) {
-			return
-		}
+		// File was truncated or rotated, send last line to recover
+		t.emit(ctx, []byte(lines[len(lines)-1]))
 	}
-
 	t.updateSignature(lines)
 }
 
@@ -120,7 +112,7 @@ func (t *fileTailer) readAllLines() []string {
 	if err != nil {
 		return nil
 	}
-	defer func() { _ = file.Close() }()
+	defer file.Close()
 
 	var lines []string
 	scanner := bufio.NewScanner(file)
@@ -131,18 +123,21 @@ func (t *fileTailer) readAllLines() []string {
 }
 
 func (t *fileTailer) updateSignature(lines []string) {
-	if len(lines) <= t.sigSize {
-		t.signature = append([]string(nil), lines...)
+	if len(lines) == 0 {
+		t.signature = nil
 		return
 	}
-	t.signature = append([]string(nil), lines[len(lines)-t.sigSize:]...)
+	start := len(lines) - t.sigSize
+	if start < 0 {
+		start = 0
+	}
+	t.signature = append([]string(nil), lines[start:]...)
 }
 
 func (t *fileTailer) findLastReadIndex(lines []string) int {
 	if len(t.signature) == 0 {
 		return -1
 	}
-
 	for i := len(lines) - len(t.signature); i >= 0; i-- {
 		match := true
 		for j := range t.signature {
@@ -156,20 +151,4 @@ func (t *fileTailer) findLastReadIndex(lines []string) int {
 		}
 	}
 	return -1
-}
-
-func (t *fileTailer) resetTimer(timer *time.Timer) (*time.Timer, <-chan time.Time) {
-	if timer == nil {
-		timer = time.NewTimer(debounceDuration)
-		return timer, timer.C
-	}
-
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-	timer.Reset(debounceDuration)
-	return timer, timer.C
 }
