@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -11,8 +10,10 @@ import (
 
 	"github.com/kxrxh/logram/internal/buffer"
 	"github.com/kxrxh/logram/internal/config"
+	"github.com/kxrxh/logram/internal/database"
 	"github.com/kxrxh/logram/internal/parser"
 	"github.com/kxrxh/logram/internal/reader"
+	"github.com/kxrxh/logram/internal/telegram"
 )
 
 func main() {
@@ -23,12 +24,42 @@ func main() {
 
 	cfg, err := config.Load(pathEnv)
 	if err != nil {
-		panic(err)
+		log.Fatalf("load config: %v", err)
+	}
+
+	var db *database.DB
+	if cfg.Get().Database.Path != "" {
+		db, err = database.New(cfg.Get().Database.Path)
+		if err != nil {
+			log.Printf("initialize database: %v", err)
+		}
 	}
 
 	p, err := parser.NewParserFromConfig(toRuleConfig(cfg.Get().Parser.Rules))
 	if err != nil {
-		panic(err)
+		if db != nil {
+			_ = db.Close()
+		}
+		log.Fatalf("create parser: %v", err)
+	}
+
+	defer func() {
+		if db != nil {
+			if err := db.Close(); err != nil {
+				log.Printf("close database: %v", err)
+			}
+		}
+	}()
+
+	var bot *telegram.Bot
+	if cfg.Get().Bot.Token != "" {
+		bot, err = telegram.NewBot(cfg.Get().Bot.Token, db)
+		if err != nil {
+			log.Printf("initialize telegram bot: %v", err)
+		} else if err := bot.Start(); err != nil {
+			log.Printf("start telegram bot: %v", err)
+			bot = nil
+		}
 	}
 
 	cfg.Watch(func(newCfg *config.Config) {
@@ -46,7 +77,13 @@ func main() {
 
 	readChan := reader.ReadFileTail(ctx, cfg.Get().Logs.Path)
 
-	buf := buffer.New(ctx, 100, 500*time.Millisecond, buffer.WithPolicy(buffer.DropOldest))
+	batchCfg := cfg.Get().Batch
+	buf := buffer.New(
+		ctx,
+		batchCfg.Size,
+		batchCfg.Interval,
+		buffer.WithPolicy(getPolicy(batchCfg.Policy)),
+	)
 	buf.Start()
 
 	go func() {
@@ -55,19 +92,36 @@ func main() {
 		}
 	}()
 
-	go func() {
-		for batch := range buf.Output() {
-			entry, err := p.ParseLine(batch)
-			if err != nil {
-				if errors.Is(err, parser.ErrEmptyLine) || errors.Is(err, parser.ErrNoMatchRules) {
-					continue
+	parsedChan := p.Start(ctx, buf.Output())
+
+	var sendChan chan parser.LogEntry
+	if bot != nil {
+		sendChan = make(chan parser.LogEntry, batchCfg.Size)
+		go func() {
+			for entry := range sendChan {
+				if err := bot.SendLog(entry); err != nil {
+					log.Printf("send telegram message: %v", err)
 				}
-				log.Printf("Parse error: %v", err)
-				continue
 			}
-			log.Printf("Parsed entry: %s [%s] %s", entry.Timestamp.Format(time.RFC3339), entry.Level, string(entry.Message))
+		}()
+	}
+
+	for entry := range parsedChan {
+		if bot != nil {
+			sendChan <- entry
+		} else {
+			// Non-production path
+			// #nosec G706 // false positive: dev-only log of parsed entry, not production input
+			log.Printf("parsed entry: %q [%s] %q",
+				entry.Timestamp.Format(time.RFC3339),
+				entry.Level,
+				string(entry.Message))
 		}
-	}()
+	}
+
+	if bot != nil {
+		close(sendChan)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -76,6 +130,22 @@ func main() {
 	log.Println("Shutting down...")
 	cancel()
 	buf.Stop()
+	if bot != nil {
+		bot.Stop()
+	}
+}
+
+func getPolicy(p string) buffer.BufferPolicy {
+	switch p {
+	case "block_on_full":
+		return buffer.BlockOnFull
+	case "drop_new":
+		return buffer.DropNew
+	case "drop_oldest":
+		return buffer.DropOldest
+	default:
+		return buffer.BlockOnFull
+	}
 }
 
 func toRuleConfig(rules []config.Rule) []parser.RuleConfig {

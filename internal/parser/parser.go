@@ -2,6 +2,8 @@ package parser
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"regexp"
 	"sync"
 	"time"
@@ -16,8 +18,6 @@ var (
 	}
 
 	ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
-	defaultGlobalParser = NewParser(nil)
 )
 
 type LogLevel string
@@ -87,6 +87,35 @@ func (p *Parser) Rules() []Rule {
 	return p.rules
 }
 
+func (p *Parser) Start(ctx context.Context, input <-chan []byte) <-chan LogEntry {
+	output := make(chan LogEntry, 100)
+
+	go func() {
+		defer close(output)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case line, ok := <-input:
+				if !ok {
+					return
+				}
+				entry, err := p.ParseLine(line)
+				if err != nil {
+					continue
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case output <- entry:
+				}
+			}
+		}
+	}()
+
+	return output
+}
+
 func (p *Parser) ParseLogStream(ch <-chan []byte) ([]LogEntry, []ParseError) {
 	entries := make([]LogEntry, 0, 100)
 	var errs []ParseError
@@ -94,7 +123,7 @@ func (p *Parser) ParseLogStream(ch <-chan []byte) ([]LogEntry, []ParseError) {
 	for line := range ch {
 		entry, err := p.ParseLine(line)
 		if err != nil {
-			if err.Reason == ErrNoMatchRules {
+			if errors.Is(err.Reason, ErrNoMatchRules) {
 				continue
 			}
 			errs = append(errs, *err)
@@ -122,17 +151,14 @@ func (p *Parser) ParseLine(line []byte) (LogEntry, *ParseError) {
 	}
 
 	for _, rule := range rules {
-		locs := rule.Regex.FindSubmatchIndex(line)
-		if locs == nil {
-			continue
+		if rule.Regex.Match(line) {
+			entry, err := parseDefault(line)
+			if err != nil {
+				return LogEntry{}, &ParseError{Line: string(line), Reason: err.Reason}
+			}
+			entry.RuleName = rule.Name
+			return entry, nil
 		}
-
-		entry, err := parseDefault(line)
-		if err != nil {
-			return LogEntry{}, &ParseError{Line: string(line), Reason: err.Reason}
-		}
-		entry.RuleName = rule.Name
-		return entry, nil
 	}
 
 	return LogEntry{}, &ParseError{Line: string(line), Reason: ErrNoMatchRules}
@@ -218,12 +244,4 @@ func parseLevel(s string) LogLevel {
 	default:
 		return LevelInfo
 	}
-}
-
-func ParseLogStream(ch <-chan []byte) ([]LogEntry, []ParseError) {
-	return defaultGlobalParser.ParseLogStream(ch)
-}
-
-func ParseLine(line string) (LogEntry, *ParseError) {
-	return defaultGlobalParser.ParseLine([]byte(line))
 }

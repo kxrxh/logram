@@ -10,9 +10,9 @@ import (
 
 const waitInterval = 100 * time.Millisecond
 
-func collectWithTimeout(ch <-chan []byte, count int, timeout time.Duration) []string {
+func collectWithTimeout(ch <-chan []byte, count int, _ time.Duration) []string {
 	var lines []string
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	for len(lines) < count {
@@ -33,14 +33,15 @@ func TestReadFileTail_BasicAppend(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpPath := filepath.Join(tmpDir, "test.log")
 
-	_ = os.WriteFile(tmpPath, []byte("old1\nold2\n"), 0o644)
+	_ = os.WriteFile(tmpPath, []byte("old1\nold2\n"), 0o600)
 
 	ctx := t.Context()
 	ch := ReadFileTail(ctx, tmpPath)
 
 	time.Sleep(waitInterval)
 
-	f, _ := os.OpenFile(tmpPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	// #nosec G304 // test-only file created via t.TempDir()/os.CreateTemp
+	f, _ := os.OpenFile(tmpPath, os.O_APPEND|os.O_WRONLY, 0o600)
 	if _, err := f.WriteString("new1\nnew2\n"); err != nil {
 		t.Fatalf("failed to write: %v", err)
 	}
@@ -63,14 +64,14 @@ func TestReadFileTail_MainGoOverwriteFile(t *testing.T) {
 	tmpPath := filepath.Join(tmpDir, "test.log")
 
 	initial := "line1\nline2\nline3\n"
-	_ = os.WriteFile(tmpPath, []byte(initial), 0o644)
+	_ = os.WriteFile(tmpPath, []byte(initial), 0o600)
 
 	ctx := t.Context()
 	ch := ReadFileTail(ctx, tmpPath)
 	time.Sleep(waitInterval)
 
 	updated := "line2\nline3\nline4\n"
-	_ = os.WriteFile(tmpPath, []byte(updated), 0o644)
+	_ = os.WriteFile(tmpPath, []byte(updated), 0o600)
 
 	lines := collectWithTimeout(ch, 1, 1*time.Second)
 
@@ -91,7 +92,7 @@ func TestReadFileTail_NonExistentFile(t *testing.T) {
 	ch := ReadFileTail(ctx, tmpPath)
 
 	time.Sleep(waitInterval)
-	_ = os.WriteFile(tmpPath, []byte("discovered\n"), 0o644)
+	_ = os.WriteFile(tmpPath, []byte("discovered\n"), 0o600)
 
 	lines := collectWithTimeout(ch, 1, 1*time.Second)
 	t.Logf("Found: %v", lines)
@@ -100,7 +101,7 @@ func TestReadFileTail_NonExistentFile(t *testing.T) {
 func TestReadFileTail_ContextCancel(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpPath := filepath.Join(tmpDir, "cancel.log")
-	_ = os.WriteFile(tmpPath, []byte("init\n"), 0o644)
+	_ = os.WriteFile(tmpPath, []byte("init\n"), 0o600)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	ch := ReadFileTail(ctx, tmpPath)
@@ -122,13 +123,13 @@ func TestReadFileTail_SignatureRecovery(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpPath := filepath.Join(tmpDir, "recovery.log")
 
-	_ = os.WriteFile(tmpPath, []byte("A\nB\nC\n"), 0o644)
+	_ = os.WriteFile(tmpPath, []byte("A\nB\nC\n"), 0o600)
 
 	ctx := t.Context()
 	ch := ReadFileTail(ctx, tmpPath)
 	time.Sleep(waitInterval)
 
-	_ = os.WriteFile(tmpPath, []byte("X\nY\nZ\n"), 0o644)
+	_ = os.WriteFile(tmpPath, []byte("X\nY\nZ\n"), 0o600)
 
 	lines := collectWithTimeout(ch, 1, 1*time.Second)
 

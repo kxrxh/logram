@@ -20,8 +20,6 @@ var (
 )
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
-
 	go func() {
 		for {
 			generateLog()
@@ -46,7 +44,12 @@ func generateLog() {
 		lines = lines[len(lines)-maxLines+1:]
 	}
 
-	logLine := fmt.Sprintf("%s [%s] %s\n", time.Now().Format(time.RFC3339), logLevels[rand.Intn(len(logLevels))], generateRandomMessage())
+	logLine := fmt.Sprintf(
+		"%s [%s] %s\n",
+		time.Now().Format(time.RFC3339),
+		logLevels[rand.Intn(len(logLevels))],
+		generateRandomMessage(),
+	)
 	lines = append(lines, logLine)
 
 	err = writeLines(lines, logFileName)

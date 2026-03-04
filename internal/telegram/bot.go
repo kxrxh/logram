@@ -3,22 +3,25 @@ package telegram
 import (
 	"context"
 	"log"
+	"strings"
 
+	"github.com/kxrxh/logram/internal/database"
+	"github.com/kxrxh/logram/internal/parser"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 type Bot struct {
-	client     *telego.Bot
-	botHandler *th.BotHandler
-	updates    <-chan telego.Update
-	ctx        context.Context
-	cancel     context.CancelFunc
+	client          *Client
+	subscriptionMgr *SubscriptionManager
+	ctx             context.Context
+	cancel          context.CancelFunc
+	commandRegistry *CommandRegistry
+	formatter       *MessageFormatter
 }
 
-func NewBot(token string) (*Bot, error) {
-	client, err := telego.NewBot(token, telego.WithDefaultDebugLogger())
+func NewBot(token string, db *database.DB) (*Bot, error) {
+	client, err := NewClient(token)
 	if err != nil {
 		return nil, err
 	}
@@ -26,30 +29,75 @@ func NewBot(token string) (*Bot, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Bot{
-		client: client,
-		ctx:    ctx,
-		cancel: cancel,
+		client:          client,
+		subscriptionMgr: NewSubscriptionManager(db),
+		commandRegistry: NewCommandRegistry(),
+		formatter:       NewMessageFormatter(),
+		ctx:             ctx,
+		cancel:          cancel,
 	}, nil
 }
 
+func (b *Bot) RegisterCommand(
+	name, description string,
+	handler func(ctx *th.Context, update telego.Update) error,
+	aliases ...string,
+) {
+	b.commandRegistry.Register(name, description, handler, aliases...)
+}
+
+func (b *Bot) setupCommands() {
+	b.RegisterCommand("start", "Начать получать уведомления о логах", b.handleStartCommand)
+	b.RegisterCommand("stop", "Отписаться от уведомлений", b.handleStopCommand)
+	b.RegisterCommand("help", "Показать доступные команды", b.handleHelpCommand)
+	b.RegisterCommand(
+		"status",
+		"Показать текущий статус подписки",
+		b.handleStatusCommand,
+		"subscribe",
+		"subscription",
+	)
+}
+
 func (b *Bot) Start() error {
-	_, err := b.client.GetMe(b.ctx)
+	_, err := b.client.GetMe()
 	if err != nil {
 		return err
 	}
 
-	b.updates, err = b.client.UpdatesViaLongPolling(b.ctx, nil)
+	updates, err := b.client.Updates()
 	if err != nil {
 		return err
 	}
 
-	b.botHandler, err = th.NewBotHandler(b.client, b.updates)
+	botHandler, err := th.NewBotHandler(b.client.Bot(), updates)
 	if err != nil {
 		return err
 	}
+
+	b.setupCommands()
+
+	// Register command handlers
+	for name := range b.commandRegistry.GetAllCommands() {
+		botHandler.Handle(func(ctx *th.Context, update telego.Update) error {
+			return b.handleCommand(ctx, update, name)
+		}, th.CommandEqual(name))
+	}
+
+	// Register aliases
+	for alias := range b.commandRegistry.GetAllAliases() {
+		botHandler.Handle(func(ctx *th.Context, update telego.Update) error {
+			if cmd, exists := b.commandRegistry.GetCommandByAlias(alias); exists {
+				return cmd.Handler(ctx, update)
+			}
+			return nil
+		}, th.CommandEqual(alias))
+	}
+
+	botHandler.HandleMessage(b.handleAnyMessage)
 
 	go func() {
-		if err := b.botHandler.Start(); err != nil {
+		if err := botHandler.Start(); err != nil {
 			log.Printf("bot handler start error: %v", err)
 		}
 	}()
@@ -57,60 +105,177 @@ func (b *Bot) Start() error {
 	return nil
 }
 
-func (b *Bot) Client() *telego.Bot {
-	return b.client
-}
-
-func (b *Bot) Context() context.Context {
-	return b.ctx
-}
-
-func (b *Bot) SendMessage(chatID int64, text string) error {
-	_, err := b.client.SendMessage(b.ctx, tu.Message(
-		tu.ID(chatID),
-		text,
-	))
-	return err
-}
-
-func (b *Bot) SendMessageWithKeyboard(chatID int64, text string, buttons [][]string) error {
-	var keyboard [][]telego.InlineKeyboardButton
-	for _, row := range buttons {
-		var buttonRow []telego.InlineKeyboardButton
-		for _, btn := range row {
-			buttonRow = append(buttonRow, telego.InlineKeyboardButton{
-				Text: btn,
-			})
-		}
-		keyboard = append(keyboard, buttonRow)
+func (b *Bot) handleCommand(ctx *th.Context, update telego.Update, commandName string) error {
+	if update.Message == nil {
+		return nil
 	}
 
-	_, err := b.client.SendMessage(b.ctx, tu.Message(
-		tu.ID(chatID),
-		text,
-	).WithReplyMarkup(tu.InlineKeyboard(keyboard...)))
+	cmd, exists := b.commandRegistry.GetCommand(commandName)
+	if !exists {
+		return nil
+	}
 
-	return err
+	return cmd.Handler(ctx, update)
 }
 
-func (b *Bot) HandleCommands(handler func(*th.Context, telego.Message) error, predicates ...th.Predicate) {
-	b.botHandler.HandleMessage(handler, predicates...)
+func (b *Bot) handleStartCommand(ctx *th.Context, update telego.Update) error {
+	if update.Message == nil {
+		return nil
+	}
+
+	chat := update.Message.Chat
+	chatID := chat.ID
+
+	if b.subscriptionMgr.IsSubscribed(chatID) {
+		return b.sendAlreadySubscribed(chatID)
+	}
+
+	title := chat.Title
+	if title == "" {
+		title = "Chat"
+	}
+
+	if err := b.subscriptionMgr.AddChat(chatID, title); err != nil {
+		log.Printf("Failed to save chat %d: %v", chatID, err)
+		b.sendErrorResponse(chatID, "subscription", err)
+		return nil
+	}
+
+	log.Printf("New chat registered: %s (%d)", title, chatID)
+	return b.sendActivationMessage(chatID)
 }
 
-func (b *Bot) HandleMessages(handler func(*th.Context, telego.Message) error) {
-	b.botHandler.HandleMessage(handler)
+func (b *Bot) handleAnyMessage(ctx *th.Context, message telego.Message) error {
+	if message.From == nil || message.From.IsBot {
+		return nil
+	}
+
+	if len(message.Text) > 0 && message.Text[0] == '/' {
+		commandName := strings.TrimPrefix(message.Text, "/")
+		commandParts := strings.Fields(commandName)
+		if len(commandParts) > 0 {
+			cmdName := commandParts[0]
+			if _, exists := b.commandRegistry.GetCommand(cmdName); exists {
+				return nil
+			}
+			return b.handleHelpCommand(ctx, telego.Update{Message: &message})
+		}
+		return b.handleHelpCommand(ctx, telego.Update{Message: &message})
+	}
+
+	return b.handleHelpCommand(ctx, telego.Update{Message: &message})
 }
 
-func (b *Bot) HandleCallbackQueries(handler func(*th.Context, telego.CallbackQuery) error) {
-	b.botHandler.HandleCallbackQuery(handler)
+func (b *Bot) handleStatusCommand(ctx *th.Context, update telego.Update) error {
+	if update.Message == nil {
+		return nil
+	}
+
+	chatID := update.Message.Chat.ID
+	isSubscribed := b.subscriptionMgr.IsSubscribed(chatID)
+
+	statusMessage := b.formatter.FormatSubscriptionStatus(isSubscribed)
+	return b.client.SendMessageHTML(chatID, statusMessage)
+}
+
+func (b *Bot) sendAlreadySubscribed(chatID int64) error {
+	msg := "Вы уже получаете уведомления о логах. Используйте /stop для отписки."
+	if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+		log.Printf("Failed to send message to chat %d: %v", chatID, err)
+	}
+	return nil
+}
+
+func (b *Bot) sendActivationMessage(chatID int64) error {
+	msg := "<b>Бот активирован!</b>\n\nВы будете получать уведомления о логах. Используйте /stop для отписки."
+	if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+		log.Printf("Failed to send activation message to chat %d: %v", chatID, err)
+	}
+	return nil
+}
+
+func (b *Bot) sendNotSubscribed(chatID int64) error {
+	msg := "Вы не получаете уведомления о логах."
+	if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+		log.Printf("Failed to send message to chat %d: %v", chatID, err)
+	}
+	return nil
+}
+
+func (b *Bot) sendUnsubscribeMessage(chatID int64) error {
+	msg := "<b>Вы отписались!</b>\n\nВы больше не будете получать уведомления о логах. Используйте /start для повторной активации."
+	if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+		log.Printf("Failed to send unsubscribe message to chat %d: %v", chatID, err)
+	}
+	return nil
+}
+
+func (b *Bot) sendErrorResponse(chatID int64, operation string, err error) {
+	log.Printf("Error in %s for chat %d: %v", operation, chatID, err)
+	errorMessage := "❌ Произошла ошибка при обработке запроса. Пожалуйста, попробуйте позже."
+	if sendErr := b.client.SendMessageHTML(chatID, errorMessage); sendErr != nil {
+		log.Printf("Failed to send error message to chat %d: %v", chatID, sendErr)
+	}
+}
+
+func (b *Bot) handleHelpCommand(ctx *th.Context, update telego.Update) error {
+	if update.Message == nil {
+		return nil
+	}
+
+	chatID := update.Message.Chat.ID
+	helpText := b.formatter.FormatHelp(b.commandRegistry.GetAllCommands())
+
+	if err := b.client.SendMessageHTML(chatID, helpText); err != nil {
+		log.Printf("Failed to send help message to chat %d: %v", chatID, err)
+	}
+	return nil
+}
+
+func (b *Bot) handleStopCommand(ctx *th.Context, update telego.Update) error {
+	chatID := update.Message.Chat.ID
+
+	if !b.subscriptionMgr.IsSubscribed(chatID) {
+		return b.sendNotSubscribed(chatID)
+	}
+
+	if err := b.subscriptionMgr.RemoveChat(chatID); err != nil {
+		log.Printf("Failed to remove chat %d: %v", chatID, err)
+		b.sendErrorResponse(chatID, "unsubscription", err)
+		return nil
+	}
+
+	log.Printf("Chat %d removed via /stop command", chatID)
+	return b.sendUnsubscribeMessage(chatID)
+}
+
+func (b *Bot) SendMessageHTML(chatID int64, text string) error {
+	return b.client.SendMessageHTML(chatID, text)
 }
 
 func (b *Bot) Stop() {
-	if b.botHandler != nil {
-		if err := b.botHandler.Stop(); err != nil {
-			log.Printf("bot handler stop error: %v", err)
-		}
-	}
 	b.cancel()
 	log.Println("Telegram bot stopped")
+}
+
+func (b *Bot) SubscriberCount() int {
+	return b.subscriptionMgr.SubscriberCount()
+}
+
+func (b *Bot) IsChatSubscribed(chatID int64) bool {
+	return b.subscriptionMgr.IsSubscribed(chatID)
+}
+
+func (b *Bot) SendLog(entry parser.LogEntry) error {
+	msg := b.formatter.FormatLogEntry(entry)
+
+	subscribers := b.subscriptionMgr.GetAllSubscribers()
+	var lastErr error
+	for _, chatID := range subscribers {
+		if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+			lastErr = err
+			log.Printf("Failed to send message to chat %d: %v", chatID, err)
+		}
+	}
+	return lastErr
 }

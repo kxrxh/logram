@@ -17,7 +17,7 @@ func BenchmarkReadAllLines_100Lines(b *testing.B) {
 		lines[i] = fmt.Sprintf("log line %d with some data", i)
 	}
 	content := []byte(joinLines(lines))
-	_ = os.WriteFile(tmpPath, content, 0o644)
+	_ = os.WriteFile(tmpPath, content, 0o600)
 
 	t := &fileTailer{
 		path:    tmpPath,
@@ -39,7 +39,7 @@ func BenchmarkReadAllLines_10000Lines(b *testing.B) {
 		lines[i] = fmt.Sprintf("log line %d with some data", i)
 	}
 	content := []byte(joinLines(lines))
-	_ = os.WriteFile(tmpPath, content, 0o644)
+	_ = os.WriteFile(tmpPath, content, 0o600)
 
 	t := &fileTailer{
 		path:    tmpPath,
@@ -61,7 +61,7 @@ func BenchmarkReadAllLines_100000Lines(b *testing.B) {
 		lines[i] = fmt.Sprintf("log line %d with some data", i)
 	}
 	content := []byte(joinLines(lines))
-	_ = os.WriteFile(tmpPath, content, 0o644)
+	_ = os.WriteFile(tmpPath, content, 0o600)
 
 	t := &fileTailer{
 		path:    tmpPath,

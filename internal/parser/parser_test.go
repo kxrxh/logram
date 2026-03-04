@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"errors"
 	"regexp"
 	"testing"
 	"time"
@@ -113,7 +114,11 @@ func TestParseLine_Default(t *testing.T) {
 			}
 			if !tt.wantErr {
 				if !tt.want.Timestamp.Equal(got.Timestamp) {
-					t.Errorf("ParseLine() timestamp = %v, want %v", got.Timestamp, tt.want.Timestamp)
+					t.Errorf(
+						"ParseLine() timestamp = %v, want %v",
+						got.Timestamp,
+						tt.want.Timestamp,
+					)
 				}
 				if got.Level != tt.want.Level {
 					t.Errorf("ParseLine() level = %v, want %v", got.Level, tt.want.Level)
@@ -159,7 +164,11 @@ func TestParseLine_WithFilters(t *testing.T) {
 			}
 			if cfgErr != nil && tt.wantErr {
 				if tt.errType != nil && !errorsIs(cfgErr, tt.errType) {
-					t.Errorf("NewParserFromConfig() error = %v, want error type %v", cfgErr, tt.errType)
+					t.Errorf(
+						"NewParserFromConfig() error = %v, want error type %v",
+						cfgErr,
+						tt.errType,
+					)
 				}
 				return
 			}
@@ -174,13 +183,20 @@ func TestParseLine_WithFilters(t *testing.T) {
 			}
 			if tt.wantErr && tt.errType != nil && parseErr != nil {
 				if !errorsIs(parseErr.Reason, tt.errType) {
-					t.Errorf("ParseLine() error = %v, want error type %v", parseErr.Reason, tt.errType)
+					t.Errorf(
+						"ParseLine() error = %v, want error type %v",
+						parseErr.Reason,
+						tt.errType,
+					)
 				}
 				return
 			}
 			if !tt.wantErr {
 				if got.Timestamp != tt.want.Timestamp || got.Level != tt.want.Level ||
-					!bytes.Equal(got.Message, tt.want.Message) || !bytes.Equal(got.Raw, tt.want.Raw) || got.RuleName != tt.want.RuleName {
+					!bytes.Equal(
+						got.Message,
+						tt.want.Message,
+					) || !bytes.Equal(got.Raw, tt.want.Raw) || got.RuleName != tt.want.RuleName {
 					t.Errorf("ParseLine() = %+v, want %+v", got, tt.want)
 				}
 			}
@@ -205,7 +221,8 @@ func TestParseLine_WithANSI(t *testing.T) {
 func TestParseLine_DefaultParser(t *testing.T) {
 	line := "2024-01-15T10:30:00Z [INFO] Using default parser"
 
-	got, err := ParseLine(line)
+	p := NewParser(nil)
+	got, err := p.ParseLine([]byte(line))
 	if err != nil {
 		t.Fatalf("ParseLine() unexpected error: %v", err)
 	}
@@ -234,7 +251,9 @@ func TestParseLogStream(t *testing.T) {
 		t.Errorf("ParseLogStream() got %d entries, want 3", len(entries))
 	}
 	if len(entries) > 0 {
-		if !bytes.Equal(entries[0].Message, []byte("Message 1")) || !bytes.Equal(entries[1].Message, []byte("Message 2")) || !bytes.Equal(entries[2].Message, []byte("Message 3")) {
+		if !bytes.Equal(entries[0].Message, []byte("Message 1")) ||
+			!bytes.Equal(entries[1].Message, []byte("Message 2")) ||
+			!bytes.Equal(entries[2].Message, []byte("Message 3")) {
 			t.Errorf("ParseLogStream() entries = %v", entries)
 		}
 	}
@@ -448,7 +467,7 @@ func TestLogEntry_Fields(t *testing.T) {
 }
 
 func errorsIs(err, target error) bool {
-	if err == target {
+	if errors.Is(err, target) {
 		return true
 	}
 	if err == nil || target == nil {

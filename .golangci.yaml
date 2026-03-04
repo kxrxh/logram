@@ -1,0 +1,48 @@
+version: 2
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+    - golines
+linters:
+  exclusions:
+    paths:
+      - cmd/task/main.go
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - unconvert
+    - unparam
+    - gocritic
+    - contextcheck
+    - err113
+    - gosec
+    - usestdlibvars
+    - thelper
+    - iface
+    - intrange
+    - nakedret
+    - perfsprint
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  govet:
+    enable-all: true
+  misspell:
+    locale: US
+  unparam:
+    algo: cha
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0

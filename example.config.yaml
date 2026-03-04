@@ -1,5 +1,5 @@
 bot:
-  token: "8629453715:AAEPuJtjtqmODAOlFl74ymjfu9JP750rKCI"
+  token: "YOUR TELEGRAM BOT TOKEN"
 parser:
   rules:
     - name: "errors"

@@ -2,6 +2,7 @@ package database
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -9,6 +10,8 @@ import (
 )
 
 func setupTestDB(t *testing.T) *DB {
+	t.Helper()
+
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
@@ -138,7 +141,14 @@ func TestNew(t *testing.T) {
 	if err := tmpFile.Close(); err != nil {
 		t.Fatalf("failed to close temp file: %v", err)
 	}
-	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	// #nosec G703 // safe: path created by os.CreateTemp in test, located in system temp dir
+	defer func() {
+		name := tmpFile.Name()
+		// extra guard: ensure the file is inside os.TempDir()
+		if strings.HasPrefix(name, os.TempDir()) {
+			_ = os.Remove(name)
+		}
+	}()
 
 	db, err := New(tmpFile.Name())
 	if err != nil {

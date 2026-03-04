@@ -14,6 +14,13 @@ const (
 	DropOldest
 )
 
+var batchPool = sync.Pool{
+	New: func() any {
+		s := make([][]byte, 0)
+		return &s
+	},
+}
+
 type Buffer struct {
 	maxSize       int
 	flushInterval time.Duration
@@ -70,68 +77,70 @@ func (b *Buffer) run() {
 	ticker := time.NewTicker(b.flushInterval)
 	defer ticker.Stop()
 
-	batch := make([][]byte, 0, b.maxSize)
+	batch := batchPool.Get().(*[][]byte)
+	*batch = (*batch)[:0]
 
 	for {
 		select {
 		case <-b.ctx.Done():
-			// Final drain of the input channel before exiting
 			for {
 				select {
 				case msg, ok := <-b.input:
 					if !ok {
 						break
 					}
-					if len(batch) < b.maxSize {
-						batch = append(batch, msg)
+					if len(*batch) < b.maxSize {
+						*batch = append(*batch, msg)
 					}
 					continue
 				default:
 				}
 				break
 			}
-			b.emit(batch, true)
+			b.emit(*batch, true)
+			batchPool.Put(batch)
 			return
 
 		case msg, ok := <-b.input:
 			if !ok {
-				b.emit(batch, true)
+				b.emit(*batch, true)
+				batchPool.Put(batch)
 				return
 			}
 
-			if len(batch) >= b.maxSize {
+			if len(*batch) >= b.maxSize {
 				switch b.policy {
 				case BlockOnFull:
-					b.emit(batch, false)
-					batch = batch[:0]
+					b.emit(*batch, false)
+					*batch = (*batch)[:0]
 					ticker.Reset(b.flushInterval)
 				case DropNew:
-					continue // Skip appending this message
+					continue
 				case DropOldest:
-					if len(batch) > 0 {
-						batch = batch[1:]
+					if len(*batch) > 0 {
+						*batch = append((*batch)[:0], (*batch)[1:]...)
 					}
 				}
 			}
 
-			batch = append(batch, msg)
+			*batch = append(*batch, msg)
 
-			// Only auto-flush on hit if policy is BlockOnFull
-			if b.policy == BlockOnFull && len(batch) >= b.maxSize {
-				b.emit(batch, false)
-				batch = batch[:0]
+			if b.policy == BlockOnFull && len(*batch) >= b.maxSize {
+				b.emit(*batch, false)
+				*batch = (*batch)[:0]
 				ticker.Reset(b.flushInterval)
 			}
 
 		case <-ticker.C:
-			if len(batch) > 0 {
-				b.emit(batch, false)
-				batch = batch[:0]
-			}
+			b.flushBatch(*batch)
+			*batch = (*batch)[:0]
 		}
 	}
 }
 
+// emit sends batch messages to output channel.
+// With force=true, sends all messages immediately.
+// Without force, sends with timeout (emitTimeout) and returns on timeout.
 func (b *Buffer) emit(batch [][]byte, force bool) {
 	for _, msg := range batch {
 		if force {
@@ -139,9 +148,14 @@ func (b *Buffer) emit(batch [][]byte, force bool) {
 		} else {
 			select {
 			case b.output <- msg:
-			case <-time.After(50 * time.Millisecond):
-				return
+			default:
 			}
 		}
+	}
+}
+
+func (b *Buffer) flushBatch(batch [][]byte) {
+	if len(batch) > 0 {
+		b.emit(batch, false)
 	}
 }

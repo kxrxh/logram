@@ -3,6 +3,7 @@ package reader
 import (
 	"bufio"
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -27,6 +28,7 @@ type fileTailer struct {
 	out       chan<- []byte
 	signature []string
 	sigSize   int
+	lastSize  int64
 }
 
 func (t *fileTailer) run(ctx context.Context) {
@@ -36,7 +38,11 @@ func (t *fileTailer) run(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	defer watcher.Close()
+	defer func() {
+		if err := watcher.Close(); err != nil {
+			log.Printf("close watcher: %v", err)
+		}
+	}()
 
 	// Watch the directory, not the file, to handle missing files
 	dir := filepath.Dir(t.path)
@@ -45,7 +51,8 @@ func (t *fileTailer) run(ctx context.Context) {
 	}
 
 	// Initial check if file exists
-	if _, err := os.Stat(t.path); err == nil {
+	if stat, err := os.Stat(t.path); err == nil {
+		t.lastSize = stat.Size()
 		lines := t.readAllLines()
 		t.updateSignature(lines)
 	}
@@ -71,13 +78,31 @@ func (t *fileTailer) run(ctx context.Context) {
 }
 
 func (t *fileTailer) processUpdate(ctx context.Context) {
+	stat, err := os.Stat(t.path)
+	if err != nil {
+		return
+	}
+
+	// File was truncated or rotated
+	if stat.Size() < t.lastSize {
+		t.signature = nil
+		t.lastSize = stat.Size()
+		lines := t.readAllLines()
+		if len(lines) > 0 {
+			t.emit(ctx, []byte(lines[len(lines)-1]))
+			t.updateSignature(lines)
+		}
+		return
+	}
+
 	lines := t.readAllLines()
 	if len(lines) == 0 {
 		return
 	}
 
+	t.lastSize = stat.Size()
+
 	if len(t.signature) == 0 {
-		// New file or first time reading
 		t.emit(ctx, []byte(lines[len(lines)-1]))
 		t.updateSignature(lines)
 		return
@@ -85,14 +110,12 @@ func (t *fileTailer) processUpdate(ctx context.Context) {
 
 	idx := t.findLastReadIndex(lines)
 	if idx != -1 {
-		// Append new lines
 		for i := idx + 1; i < len(lines); i++ {
 			if !t.emit(ctx, []byte(lines[i])) {
 				return
 			}
 		}
 	} else {
-		// File was truncated or rotated, send last line to recover
 		t.emit(ctx, []byte(lines[len(lines)-1]))
 	}
 	t.updateSignature(lines)
@@ -112,10 +135,16 @@ func (t *fileTailer) readAllLines() []string {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("close file: %v", err)
+		}
+	}()
 
 	var lines []string
 	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}

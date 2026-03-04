@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
@@ -14,10 +15,12 @@ type Config struct {
 	Parser   ParserConfig   `mapstructure:"parser"`
 	Database DatabaseConfig `mapstructure:"database"`
 	Logs     LogsConfig     `mapstructure:"logs"`
+	Batch    BatchConfig    `mapstructure:"batch"`
 }
 
 type BotConfig struct {
-	Token string `mapstructure:"token"`
+	Token  string `mapstructure:"token"`
+	ChatID int64  `mapstructure:"chat_id"`
 }
 
 type ParserConfig struct {
@@ -26,6 +29,12 @@ type ParserConfig struct {
 
 type LogsConfig struct {
 	Path string `mapstructure:"path"`
+}
+
+type BatchConfig struct {
+	Size     int           `mapstructure:"size"`
+	Interval time.Duration `mapstructure:"interval"`
+	Policy   string        `mapstructure:"policy"`
 }
 
 type Rule struct {
@@ -44,19 +53,19 @@ func Load(path string) (*Config, error) {
 	viper.AddConfigPath(".")
 
 	if err := viper.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("failed to read config: %w", err)
+		return nil, fmt.Errorf("read config: %w", err)
 	}
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
 	return &cfg, nil
 }
 
 func (c *Config) Watch(onChange func(*Config)) {
-	viper.OnConfigChange(func(in fsnotify.Event) {
+	viper.OnConfigChange(func(fsnotify.Event) {
 		var cfg Config
 		if err := viper.Unmarshal(&cfg); err != nil {
 			return
@@ -66,6 +75,7 @@ func (c *Config) Watch(onChange func(*Config)) {
 		c.Parser = cfg.Parser
 		c.Database = cfg.Database
 		c.Logs = cfg.Logs
+		c.Batch = cfg.Batch
 		c.mu.Unlock()
 		onChange(&cfg)
 	})
