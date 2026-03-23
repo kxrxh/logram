@@ -28,7 +28,7 @@ type Buffer struct {
 	input         chan []byte
 	output        chan []byte
 	ctx           context.Context
-	cancel        context.CancelFunc
+	done          chan struct{}
 	wg            sync.WaitGroup
 	stopOnce      sync.Once
 }
@@ -40,7 +40,6 @@ func WithInputCh(ch chan []byte) Option  { return func(b *Buffer) { b.input = ch
 func WithOutputCh(ch chan []byte) Option { return func(b *Buffer) { b.output = ch } }
 
 func New(ctx context.Context, maxSize int, flushInterval time.Duration, opts ...Option) *Buffer {
-	ctx, cancel := context.WithCancel(ctx)
 	b := &Buffer{
 		maxSize:       maxSize,
 		flushInterval: flushInterval,
@@ -48,7 +47,7 @@ func New(ctx context.Context, maxSize int, flushInterval time.Duration, opts ...
 		input:         make(chan []byte, maxSize),
 		output:        make(chan []byte, maxSize),
 		ctx:           ctx,
-		cancel:        cancel,
+		done:          make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(b)
@@ -63,7 +62,7 @@ func (b *Buffer) Start() {
 
 func (b *Buffer) Stop() {
 	b.stopOnce.Do(func() {
-		b.cancel()
+		close(b.done)
 		b.wg.Wait()
 		close(b.output)
 	})
@@ -83,6 +82,24 @@ func (b *Buffer) run() {
 	for {
 		select {
 		case <-b.ctx.Done():
+			for {
+				select {
+				case msg, ok := <-b.input:
+					if !ok {
+						break
+					}
+					if len(*batch) < b.maxSize {
+						*batch = append(*batch, msg)
+					}
+					continue
+				default:
+				}
+				break
+			}
+			b.emit(*batch, true)
+			batchPool.Put(batch)
+			return
+		case <-b.done:
 			for {
 				select {
 				case msg, ok := <-b.input:

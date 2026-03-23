@@ -1,28 +1,6 @@
 package database
 
-import (
-	"os"
-	"strings"
-	"testing"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-)
-
-func setupTestDB(t *testing.T) *DB {
-	t.Helper()
-
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open test database: %v", err)
-	}
-
-	if err := db.AutoMigrate(&Subscription{}); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
-	}
-
-	return &DB{db: db}
-}
+import "testing"
 
 func TestSubscribe(t *testing.T) {
 	db := setupTestDB(t)
@@ -130,42 +108,5 @@ func TestGetAllSubscribers(t *testing.T) {
 	}
 	if len(subs) != 3 {
 		t.Errorf("expected 3 subscribers, got %d", len(subs))
-	}
-}
-
-func TestNew(t *testing.T) {
-	tmpFile, err := os.CreateTemp("", "test-*.db")
-	if err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		t.Fatalf("failed to close temp file: %v", err)
-	}
-	// #nosec G703 // safe: path created by os.CreateTemp in test, located in system temp dir
-	defer func() {
-		name := tmpFile.Name()
-		// extra guard: ensure the file is inside os.TempDir()
-		if strings.HasPrefix(name, os.TempDir()) {
-			_ = os.Remove(name)
-		}
-	}()
-
-	db, err := New(tmpFile.Name())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	err = db.Subscribe(123)
-	if err != nil {
-		t.Fatalf("Subscribe failed: %v", err)
-	}
-
-	subscribed, err := db.IsSubscribed(123)
-	if err != nil {
-		t.Fatalf("IsSubscribed failed: %v", err)
-	}
-	if !subscribed {
-		t.Error("expected user to be subscribed")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 
 	"github.com/kxrxh/logram/internal/database"
 	"github.com/kxrxh/logram/internal/parser"
@@ -14,13 +15,19 @@ import (
 type Bot struct {
 	client          *Client
 	subscriptionMgr *SubscriptionManager
+	regexManager    *RegexManager
+	db              *database.DB
+
+	addRegexMu sync.Mutex
+	addRegex   map[int64]*addRegexWizardState
+
 	ctx             context.Context
 	cancel          context.CancelFunc
 	commandRegistry *CommandRegistry
 	formatter       *MessageFormatter
 }
 
-func NewBot(token string, db *database.DB) (*Bot, error) {
+func NewBot(token string, db *database.DB, regexManager *RegexManager) (*Bot, error) {
 	client, err := NewClient(token)
 	if err != nil {
 		return nil, err
@@ -31,6 +38,9 @@ func NewBot(token string, db *database.DB) (*Bot, error) {
 	return &Bot{
 		client:          client,
 		subscriptionMgr: NewSubscriptionManager(db),
+		regexManager:    regexManager,
+		db:              db,
+		addRegex:        make(map[int64]*addRegexWizardState),
 		commandRegistry: NewCommandRegistry(),
 		formatter:       NewMessageFormatter(),
 		ctx:             ctx,
@@ -50,6 +60,26 @@ func (b *Bot) setupCommands() {
 	b.RegisterCommand("start", "Начать получать уведомления о логах", b.handleStartCommand)
 	b.RegisterCommand("stop", "Отписаться от уведомлений", b.handleStopCommand)
 	b.RegisterCommand("help", "Показать доступные команды", b.handleHelpCommand)
+	b.RegisterCommand(
+		"regexes",
+		"Показать текущие regex-правила для этого чата",
+		b.handleRegexesCommand,
+	)
+	b.RegisterCommand(
+		"addregex",
+		"Добавить regex-фильтр для этого чата (бот должен быть отключен)",
+		b.handleAddRegexCommand,
+	)
+	b.RegisterCommand(
+		"resetregex",
+		"Сбросить все regex-фильтры для этого чата к значениям по умолчанию",
+		b.handleResetRegexCommand,
+	)
+	b.RegisterCommand(
+		"removeregex",
+		"Удалить одно regex-правило для этого чата",
+		b.handleRemoveRegexCommand,
+	)
 	b.RegisterCommand(
 		"status",
 		"Показать текущий статус подписки",
@@ -95,6 +125,14 @@ func (b *Bot) Start() error {
 	}
 
 	botHandler.HandleMessage(b.handleAnyMessage)
+
+	botHandler.HandleCallbackQuery(
+		func(ctx *th.Context, query telego.CallbackQuery) error {
+			return b.handleRemoveRegexCallbackQuery(ctx, query)
+		},
+		th.AnyCallbackQueryWithMessage(),
+		th.CallbackDataPrefix(callbackRemoveRegexPrefix),
+	)
 
 	go func() {
 		if err := botHandler.Start(); err != nil {
@@ -150,6 +188,10 @@ func (b *Bot) handleAnyMessage(ctx *th.Context, message telego.Message) error {
 		return nil
 	}
 
+	if consumed, err := b.handleAddRegexWizardMessage(ctx, message); consumed || err != nil {
+		return err
+	}
+
 	if len(message.Text) > 0 && message.Text[0] == '/' {
 		commandName := strings.TrimPrefix(message.Text, "/")
 		commandParts := strings.Fields(commandName)
@@ -179,7 +221,7 @@ func (b *Bot) handleStatusCommand(ctx *th.Context, update telego.Update) error {
 }
 
 func (b *Bot) sendAlreadySubscribed(chatID int64) error {
-	msg := "Вы уже получаете уведомления о логах. Используйте /stop для отписки."
+	msg := "Уведомления уже включены. Чтобы изменить regex, сначала остановите бота: /stop."
 	if err := b.client.SendMessageHTML(chatID, msg); err != nil {
 		log.Printf("Failed to send message to chat %d: %v", chatID, err)
 	}
@@ -212,7 +254,7 @@ func (b *Bot) sendUnsubscribeMessage(chatID int64) error {
 
 func (b *Bot) sendErrorResponse(chatID int64, operation string, err error) {
 	log.Printf("Error in %s for chat %d: %v", operation, chatID, err)
-	errorMessage := "❌ Произошла ошибка при обработке запроса. Пожалуйста, попробуйте позже."
+	errorMessage := "Произошла ошибка при обработке запроса. Пожалуйста, попробуйте позже."
 	if sendErr := b.client.SendMessageHTML(chatID, errorMessage); sendErr != nil {
 		log.Printf("Failed to send error message to chat %d: %v", chatID, sendErr)
 	}
@@ -272,6 +314,9 @@ func (b *Bot) SendLog(entry parser.LogEntry) error {
 	subscribers := b.subscriptionMgr.GetAllSubscribers()
 	var lastErr error
 	for _, chatID := range subscribers {
+		if b.regexManager != nil && !b.regexManager.ShouldSend(chatID, entry.Raw) {
+			continue
+		}
 		if err := b.client.SendMessageHTML(chatID, msg); err != nil {
 			lastErr = err
 			log.Printf("Failed to send message to chat %d: %v", chatID, err)

@@ -35,12 +35,33 @@ func main() {
 		}
 	}
 
-	p, err := parser.NewParserFromConfig(toRuleConfig(cfg.Get().Parser.Rules))
+	p := parser.NewParser(nil)
+
+	defaultRuleConfigs := toRuleConfig(cfg.Get().Parser.Rules)
+	rm, err := telegram.NewRegexManager(defaultRuleConfigs)
 	if err != nil {
 		if db != nil {
 			_ = db.Close()
 		}
-		log.Fatalf("create parser: %v", err)
+		log.Fatalf("create regex manager: %v", err)
+	}
+
+	if db != nil {
+		allRules, err := db.GetAllChatRegexRules()
+		if err != nil {
+			log.Printf("load chat regex rules: %v", err)
+		} else {
+			byChat := make(map[int64][]database.ChatRegexRule, 16)
+			for _, r := range allRules {
+				byChat[r.ChatID] = append(byChat[r.ChatID], r)
+			}
+
+			for chatID, rules := range byChat {
+				if err := rm.RefreshChatRules(chatID, rules); err != nil {
+					log.Printf("compile chat regex rules (chat_id=%d): %v", chatID, err)
+				}
+			}
+		}
 	}
 
 	defer func() {
@@ -53,7 +74,7 @@ func main() {
 
 	var bot *telegram.Bot
 	if cfg.Get().Bot.Token != "" {
-		bot, err = telegram.NewBot(cfg.Get().Bot.Token, db)
+		bot, err = telegram.NewBot(cfg.Get().Bot.Token, db, rm)
 		if err != nil {
 			log.Printf("initialize telegram bot: %v", err)
 		} else if err := bot.Start(); err != nil {
@@ -63,14 +84,10 @@ func main() {
 	}
 
 	cfg.Watch(func(newCfg *config.Config) {
-		log.Println("Config reloaded, updating parser rules")
-		newRules, err := parser.NewParserFromConfig(toRuleConfig(newCfg.Parser.Rules))
-		if err != nil {
-			log.Printf("Failed to update rules: %v", err)
-			return
+		log.Println("Config reloaded, updating regex defaults")
+		if err := rm.SetDefaultRules(toRuleConfig(newCfg.Parser.Rules)); err != nil {
+			log.Printf("Failed to update regex defaults: %v", err)
 		}
-		p.UpdateRules(newRules.Rules())
-		log.Println("Parser rules updated:", newCfg.Parser.Rules)
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -110,8 +127,7 @@ func main() {
 		if bot != nil {
 			sendChan <- entry
 		} else {
-			// Non-production path
-			// #nosec G706 // false positive: dev-only log of parsed entry, not production input
+			// #nosec G706
 			log.Printf("parsed entry: %q [%s] %q",
 				entry.Timestamp.Format(time.RFC3339),
 				entry.Level,

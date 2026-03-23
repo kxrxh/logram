@@ -55,6 +55,18 @@ func (c *Client) SendMessageHTML(chatID int64, text string) error {
 	return err
 }
 
+func (c *Client) SendMessageHTMLWithReplyMarkup(
+	chatID int64,
+	text string,
+	replyMarkup telego.ReplyMarkup,
+) error {
+	_, err := c.client.SendMessage(c.ctx, tu.Message(
+		tu.ID(chatID),
+		text,
+	).WithParseMode("HTML").WithReplyMarkup(replyMarkup))
+	return err
+}
+
 func (c *Client) Updates() (<-chan telego.Update, error) {
 	return c.client.UpdatesViaLongPolling(c.ctx, nil)
 }
