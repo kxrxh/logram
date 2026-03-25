@@ -10,3 +10,7 @@ logs:
   path: "bot.log"
 database:
   path: "bot.db"
+batch:
+  size: 1000
+  interval: 5s
+  policy: "drop_oldest"
