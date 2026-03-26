@@ -8,9 +8,10 @@ type Subscription struct {
 }
 
 type Chat struct {
-	ChatID  int64     `gorm:"primaryKey"`
-	Title   string    `gorm:"default:''"`
-	AddedAt time.Time `gorm:"autoCreateTime"`
+	ChatID       int64     `gorm:"primaryKey"`
+	Title        string    `gorm:"default:''"`
+	BatchEnabled bool      `gorm:"default:false"`
+	AddedAt      time.Time `gorm:"autoCreateTime"`
 }
 
 type ChatRegexRule struct {

@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kxrxh/logram/internal/database"
 	"github.com/kxrxh/logram/internal/parser"
@@ -17,6 +18,7 @@ type Bot struct {
 	subscriptionMgr *SubscriptionManager
 	regexManager    *RegexManager
 	db              *database.DB
+	batchManager    *BatchManager
 
 	addRegexMu sync.Mutex
 	addRegex   map[int64]*addRegexWizardState
@@ -35,11 +37,38 @@ func NewBot(token string, db *database.DB, regexManager *RegexManager) (*Bot, er
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	var initialBatchEnabled map[int64]bool
+	if db != nil {
+		initialBatchEnabled = make(map[int64]bool)
+		chats, err := db.GetAllChats()
+		if err != nil {
+			log.Printf("failed to load chat batching flags: %v", err)
+		} else {
+			for _, chat := range chats {
+				if chat.BatchEnabled {
+					initialBatchEnabled[chat.ChatID] = true
+				}
+			}
+		}
+	} else {
+		initialBatchEnabled = make(map[int64]bool)
+	}
+
+	bm := NewBatchManager(
+		ctx,
+		5*time.Second,
+		func(chatID int64, text string) error {
+			return client.SendMessageHTML(chatID, text)
+		},
+		initialBatchEnabled,
+	)
+
 	return &Bot{
 		client:          client,
 		subscriptionMgr: NewSubscriptionManager(db),
 		regexManager:    regexManager,
 		db:              db,
+		batchManager:    bm,
 		addRegex:        make(map[int64]*addRegexWizardState),
 		commandRegistry: NewCommandRegistry(),
 		formatter:       NewMessageFormatter(),
@@ -60,6 +89,11 @@ func (b *Bot) setupCommands() {
 	b.RegisterCommand("start", "Начать получать уведомления о логах", b.handleStartCommand)
 	b.RegisterCommand("stop", "Отписаться от уведомлений", b.handleStopCommand)
 	b.RegisterCommand("help", "Показать доступные команды", b.handleHelpCommand)
+	b.RegisterCommand(
+		"batch",
+		"Вкл/выкл группировку логов (сообщения батчами)",
+		b.handleBatchCommand,
+	)
 	b.RegisterCommand(
 		"regexes",
 		"Показать текущие regex-правила для этого чата",
@@ -291,6 +325,44 @@ func (b *Bot) handleStopCommand(ctx *th.Context, update telego.Update) error {
 	return b.sendUnsubscribeMessage(chatID)
 }
 
+func (b *Bot) handleBatchCommand(_ *th.Context, update telego.Update) error {
+	if update.Message == nil {
+		return nil
+	}
+
+	chatID := update.Message.Chat.ID
+
+	if !b.subscriptionMgr.IsSubscribed(chatID) {
+		return b.sendNotSubscribed(chatID)
+	}
+
+	current := b.batchManager.IsEnabled(chatID)
+	next := !current
+
+	if b.db != nil {
+		if err := b.db.SetChatBatchEnabled(chatID, next); err != nil {
+			b.sendErrorResponse(chatID, "batch toggle", err)
+			return nil
+		}
+	}
+
+	b.batchManager.SetEnabled(chatID, next)
+
+	if next {
+		msg := "<b>Батчинг включен</b>\n\nТеперь бот будет объединять несколько логов в одно сообщение."
+		if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+			log.Printf("Failed to send batch status to chat %d: %v", chatID, err)
+		}
+	} else {
+		msg := "<b>Батчинг выключен</b>\n\nТеперь бот будет присылать каждый лог отдельным сообщением."
+		if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+			log.Printf("Failed to send batch status to chat %d: %v", chatID, err)
+		}
+	}
+
+	return nil
+}
+
 func (b *Bot) SendMessageHTML(chatID int64, text string) error {
 	return b.client.SendMessageHTML(chatID, text)
 }
@@ -317,6 +389,14 @@ func (b *Bot) SendLog(entry parser.LogEntry) error {
 		if b.regexManager != nil && !b.regexManager.ShouldSend(chatID, entry.Raw) {
 			continue
 		}
+		if b.batchManager != nil {
+			if err := b.batchManager.Enqueue(chatID, msg); err != nil {
+				lastErr = err
+				log.Printf("Failed to enqueue/send batch for chat %d: %v", chatID, err)
+			}
+			continue
+		}
+
 		if err := b.client.SendMessageHTML(chatID, msg); err != nil {
 			lastErr = err
 			log.Printf("Failed to send message to chat %d: %v", chatID, err)

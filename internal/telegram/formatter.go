@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"fmt"
+	"html"
 	"strings"
 
 	"github.com/kxrxh/logram/internal/parser"
@@ -15,10 +16,12 @@ func NewMessageFormatter() *MessageFormatter {
 
 func (f *MessageFormatter) FormatLogEntry(entry parser.LogEntry) string {
 	levelText := getLevelText(entry.Level)
+	// Telegram `parse_mode=HTML` requires escaping any raw `<`/`&` in user/log content.
+	safeMsg := html.EscapeString(string(entry.Message))
 	return fmt.Sprintf("<b>%s</b> | %s\n<code>%s</code>",
 		levelText,
 		entry.Timestamp.Format("02.01.2006 15:04:05"),
-		string(entry.Message))
+		safeMsg)
 }
 
 func (f *MessageFormatter) FormatSubscriptionStatus(isSubscribed bool) string {
