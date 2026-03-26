@@ -7,7 +7,7 @@ parser:
     - name: "warnings"
       pattern: ".*WARN.*"
 logs:
-  path: "bot.log"
+  path: "logs.log"
 database:
   path: "bot.db"
 batch:
