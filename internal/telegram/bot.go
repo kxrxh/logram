@@ -11,6 +11,7 @@ import (
 	"github.com/kxrxh/logram/internal/parser"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
+	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 type Bot struct {
@@ -27,6 +28,21 @@ type Bot struct {
 	cancel          context.CancelFunc
 	commandRegistry *CommandRegistry
 	formatter       *MessageFormatter
+}
+
+func (b *Bot) mainKeyboard() *telego.ReplyKeyboardMarkup {
+	return tu.Keyboard(
+		tu.KeyboardRow(
+			tu.KeyboardButton("/start"),
+			tu.KeyboardButton("/stop"),
+			tu.KeyboardButton("/status"),
+		),
+		tu.KeyboardRow(
+			tu.KeyboardButton("/help"),
+			tu.KeyboardButton("/batch"),
+			tu.KeyboardButton("/regexes"),
+		),
+	).WithResizeKeyboard().WithIsPersistent()
 }
 
 func NewBot(token string, db *database.DB, regexManager *RegexManager) (*Bot, error) {
@@ -251,12 +267,12 @@ func (b *Bot) handleStatusCommand(ctx *th.Context, update telego.Update) error {
 	isSubscribed := b.subscriptionMgr.IsSubscribed(chatID)
 
 	statusMessage := b.formatter.FormatSubscriptionStatus(isSubscribed)
-	return b.client.SendMessageHTML(chatID, statusMessage)
+	return b.client.SendMessageHTMLWithReplyMarkup(chatID, statusMessage, b.mainKeyboard())
 }
 
 func (b *Bot) sendAlreadySubscribed(chatID int64) error {
 	msg := "Уведомления уже включены. Чтобы изменить regex, сначала остановите бота: /stop."
-	if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+	if err := b.client.SendMessageHTMLWithReplyMarkup(chatID, msg, b.mainKeyboard()); err != nil {
 		log.Printf("Failed to send message to chat %d: %v", chatID, err)
 	}
 	return nil
@@ -264,7 +280,7 @@ func (b *Bot) sendAlreadySubscribed(chatID int64) error {
 
 func (b *Bot) sendActivationMessage(chatID int64) error {
 	msg := "<b>Бот активирован!</b>\n\nВы будете получать уведомления о логах. Используйте /stop для отписки."
-	if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+	if err := b.client.SendMessageHTMLWithReplyMarkup(chatID, msg, b.mainKeyboard()); err != nil {
 		log.Printf("Failed to send activation message to chat %d: %v", chatID, err)
 	}
 	return nil
@@ -272,7 +288,7 @@ func (b *Bot) sendActivationMessage(chatID int64) error {
 
 func (b *Bot) sendNotSubscribed(chatID int64) error {
 	msg := "Вы не получаете уведомления о логах."
-	if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+	if err := b.client.SendMessageHTMLWithReplyMarkup(chatID, msg, b.mainKeyboard()); err != nil {
 		log.Printf("Failed to send message to chat %d: %v", chatID, err)
 	}
 	return nil
@@ -280,7 +296,7 @@ func (b *Bot) sendNotSubscribed(chatID int64) error {
 
 func (b *Bot) sendUnsubscribeMessage(chatID int64) error {
 	msg := "<b>Вы отписались!</b>\n\nВы больше не будете получать уведомления о логах. Используйте /start для повторной активации."
-	if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+	if err := b.client.SendMessageHTMLWithReplyMarkup(chatID, msg, b.mainKeyboard()); err != nil {
 		log.Printf("Failed to send unsubscribe message to chat %d: %v", chatID, err)
 	}
 	return nil
@@ -289,7 +305,7 @@ func (b *Bot) sendUnsubscribeMessage(chatID int64) error {
 func (b *Bot) sendErrorResponse(chatID int64, operation string, err error) {
 	log.Printf("Error in %s for chat %d: %v", operation, chatID, err)
 	errorMessage := "Произошла ошибка при обработке запроса. Пожалуйста, попробуйте позже."
-	if sendErr := b.client.SendMessageHTML(chatID, errorMessage); sendErr != nil {
+	if sendErr := b.client.SendMessageHTMLWithReplyMarkup(chatID, errorMessage, b.mainKeyboard()); sendErr != nil {
 		log.Printf("Failed to send error message to chat %d: %v", chatID, sendErr)
 	}
 }
@@ -302,7 +318,7 @@ func (b *Bot) handleHelpCommand(ctx *th.Context, update telego.Update) error {
 	chatID := update.Message.Chat.ID
 	helpText := b.formatter.FormatHelp(b.commandRegistry.GetAllCommands())
 
-	if err := b.client.SendMessageHTML(chatID, helpText); err != nil {
+	if err := b.client.SendMessageHTMLWithReplyMarkup(chatID, helpText, b.mainKeyboard()); err != nil {
 		log.Printf("Failed to send help message to chat %d: %v", chatID, err)
 	}
 	return nil
@@ -349,7 +365,7 @@ func (b *Bot) handleBatchCommand(_ *th.Context, update telego.Update) error {
 		if !b.subscriptionMgr.IsSubscribed(chatID) {
 			msg += "\n\n<i>Вы сейчас не подписаны на логи. Используйте /start чтобы включить уведомления.</i>"
 		}
-		if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+		if err := b.client.SendMessageHTMLWithReplyMarkup(chatID, msg, b.mainKeyboard()); err != nil {
 			log.Printf("Failed to send batch status to chat %d: %v", chatID, err)
 		}
 	} else {
@@ -357,7 +373,7 @@ func (b *Bot) handleBatchCommand(_ *th.Context, update telego.Update) error {
 		if !b.subscriptionMgr.IsSubscribed(chatID) {
 			msg += "\n\n<i>Вы сейчас не подписаны на логи. Используйте /start чтобы включить уведомления.</i>"
 		}
-		if err := b.client.SendMessageHTML(chatID, msg); err != nil {
+		if err := b.client.SendMessageHTMLWithReplyMarkup(chatID, msg, b.mainKeyboard()); err != nil {
 			log.Printf("Failed to send batch status to chat %d: %v", chatID, err)
 		}
 	}
