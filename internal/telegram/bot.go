@@ -332,10 +332,6 @@ func (b *Bot) handleBatchCommand(_ *th.Context, update telego.Update) error {
 
 	chatID := update.Message.Chat.ID
 
-	if !b.subscriptionMgr.IsSubscribed(chatID) {
-		return b.sendNotSubscribed(chatID)
-	}
-
 	current := b.batchManager.IsEnabled(chatID)
 	next := !current
 
@@ -350,11 +346,17 @@ func (b *Bot) handleBatchCommand(_ *th.Context, update telego.Update) error {
 
 	if next {
 		msg := "<b>Батчинг включен</b>\n\nТеперь бот будет объединять несколько логов в одно сообщение."
+		if !b.subscriptionMgr.IsSubscribed(chatID) {
+			msg += "\n\n<i>Вы сейчас не подписаны на логи. Используйте /start чтобы включить уведомления.</i>"
+		}
 		if err := b.client.SendMessageHTML(chatID, msg); err != nil {
 			log.Printf("Failed to send batch status to chat %d: %v", chatID, err)
 		}
 	} else {
 		msg := "<b>Батчинг выключен</b>\n\nТеперь бот будет присылать каждый лог отдельным сообщением."
+		if !b.subscriptionMgr.IsSubscribed(chatID) {
+			msg += "\n\n<i>Вы сейчас не подписаны на логи. Используйте /start чтобы включить уведомления.</i>"
+		}
 		if err := b.client.SendMessageHTML(chatID, msg); err != nil {
 			log.Printf("Failed to send batch status to chat %d: %v", chatID, err)
 		}

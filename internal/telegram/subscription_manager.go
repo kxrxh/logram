@@ -19,10 +19,10 @@ func NewSubscriptionManager(db *database.DB) *SubscriptionManager {
 	}
 
 	if db != nil {
-		chats, err := db.GetAllChats()
+		subscribers, err := db.GetAllSubscribers()
 		if err == nil {
-			for _, chat := range chats {
-				sm.chatIDs[chat.ChatID] = true
+			for _, chatID := range subscribers {
+				sm.chatIDs[chatID] = true
 			}
 		}
 	}
@@ -37,7 +37,11 @@ func (sm *SubscriptionManager) AddChat(chatID int64, title string) error {
 	if _, exists := sm.chatIDs[chatID]; !exists {
 		sm.chatIDs[chatID] = true
 		if sm.db != nil {
-			return sm.db.AddChat(chatID, title)
+			// Ensure chat settings row exists (title/settings) and persist subscription.
+			if err := sm.db.AddChat(chatID, title); err != nil {
+				return err
+			}
+			return sm.db.Subscribe(chatID)
 		}
 	}
 	return nil
@@ -50,7 +54,8 @@ func (sm *SubscriptionManager) RemoveChat(chatID int64) error {
 	if _, exists := sm.chatIDs[chatID]; exists {
 		delete(sm.chatIDs, chatID)
 		if sm.db != nil {
-			return sm.db.RemoveChat(chatID)
+			// Keep chat settings row (regex rules, batching toggle) intact.
+			return sm.db.Unsubscribe(chatID)
 		}
 	}
 	return nil
