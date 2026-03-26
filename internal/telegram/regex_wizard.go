@@ -252,7 +252,23 @@ func (b *Bot) handleRemoveRegexCallbackQuery(ctx *th.Context, query telego.Callb
 		return nil
 	}
 
+	if query.Message == nil {
+		_ = ctx.Bot().AnswerCallbackQuery(
+			ctx,
+			tu.CallbackQuery(query.ID).WithText("Некорректные данные"),
+		)
+		return nil
+	}
+
 	chatID := query.Message.GetChat().ID
+	if chatID == 0 {
+		_ = ctx.Bot().AnswerCallbackQuery(
+			ctx,
+			tu.CallbackQuery(query.ID).WithText("Некорректные данные"),
+		)
+		return nil
+	}
+
 	if b.subscriptionMgr.IsSubscribed(chatID) {
 		_ = ctx.Bot().
 			AnswerCallbackQuery(ctx, tu.CallbackQuery(query.ID).WithText("Сначала выполните /stop"))
