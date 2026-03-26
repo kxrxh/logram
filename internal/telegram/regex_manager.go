@@ -1,7 +1,9 @@
 package telegram
 
 import (
+	"log"
 	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/kxrxh/logram/internal/database"
@@ -123,6 +125,11 @@ func (rm *RegexManager) GetActiveRulesWithSource(chatID int64) ([]parser.RuleCon
 func compileRuleConfigs(rules []parser.RuleConfig) ([]compiledRule, error) {
 	compiled := make([]compiledRule, 0, len(rules))
 	for _, r := range rules {
+		if strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.Pattern) == "" {
+			log.Printf("skip default regex rule: name=%q pattern empty", r.Name)
+			continue
+		}
+
 		re, err := regexp.Compile(r.Pattern)
 		if err != nil {
 			return nil, &parser.RuleError{Rule: r.Name, Reason: err}
@@ -138,6 +145,12 @@ func compileRuleConfigs(rules []parser.RuleConfig) ([]compiledRule, error) {
 func compileChatRules(rules []database.ChatRegexRule) ([]compiledRule, error) {
 	compiled := make([]compiledRule, 0, len(rules))
 	for _, r := range rules {
+		// Rules always have a name and pattern (this is additional check)
+		if strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.Pattern) == "" {
+			log.Printf("skip chat regex rule: name=%q pattern empty", r.Name)
+			continue
+		}
+
 		re, err := regexp.Compile(r.Pattern)
 		if err != nil {
 			return nil, &parser.RuleError{Rule: r.Name, Reason: err}

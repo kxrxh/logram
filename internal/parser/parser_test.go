@@ -318,6 +318,17 @@ func TestNewParserFromConfig(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "skip empty pattern",
+			rules: []RuleConfig{
+				{
+					Name:    "error",
+					Pattern: "",
+				},
+			},
+			wantLen: 0,
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

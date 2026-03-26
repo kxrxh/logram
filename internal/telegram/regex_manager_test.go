@@ -107,3 +107,28 @@ func TestRegexManager_GetActiveRulesWithSource(t *testing.T) {
 	require.Equal(t, "overrideBar", rules[0].Name)
 	require.Equal(t, "BAR", rules[0].Pattern)
 }
+
+func TestRegexManager_SkipsEmptyPatternRules(t *testing.T) {
+	rm, err := NewRegexManager([]parser.RuleConfig{
+		ruleCfg("error", ""),
+	})
+	require.NoError(t, err)
+
+	// With all rules skipped => no active filters => send everything.
+	require.True(t, rm.ShouldSend(1, []byte("ANYTHING")))
+
+	rules, fromDefaults := rm.GetActiveRulesWithSource(1)
+	require.True(t, fromDefaults)
+	require.Len(t, rules, 0)
+}
+
+func TestRegexManager_SkipsEmptyPatternButKeepsValidOnes(t *testing.T) {
+	rm, err := NewRegexManager([]parser.RuleConfig{
+		ruleCfg("empty", ""),
+		ruleCfg("error", "ERROR"),
+	})
+	require.NoError(t, err)
+
+	require.False(t, rm.ShouldSend(1, []byte("WARN")))
+	require.True(t, rm.ShouldSend(1, []byte("ERROR")))
+}

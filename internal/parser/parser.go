@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -60,6 +62,11 @@ func NewParser(rules []Rule) *Parser {
 func NewParserFromConfig(rules []RuleConfig) (*Parser, error) {
 	var parsedRules []Rule
 	for _, r := range rules {
+		if strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.Pattern) == "" {
+			log.Printf("skip default log rule: name=%q pattern empty", r.Name)
+			continue
+		}
+
 		re, err := regexp.Compile(r.Pattern)
 		if err != nil {
 			return nil, &RuleError{
