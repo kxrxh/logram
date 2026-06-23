@@ -96,7 +96,7 @@ func (b *Buffer) run() {
 				}
 				break
 			}
-			b.emit(*batch, true)
+			b.emit(*batch)
 			batchPool.Put(batch)
 			return
 		case <-b.done:
@@ -114,13 +114,13 @@ func (b *Buffer) run() {
 				}
 				break
 			}
-			b.emit(*batch, true)
+			b.emit(*batch)
 			batchPool.Put(batch)
 			return
 
 		case msg, ok := <-b.input:
 			if !ok {
-				b.emit(*batch, true)
+				b.emit(*batch)
 				batchPool.Put(batch)
 				return
 			}
@@ -128,7 +128,7 @@ func (b *Buffer) run() {
 			if len(*batch) >= b.maxSize {
 				switch b.policy {
 				case BlockOnFull:
-					b.emit(*batch, false)
+					b.emit(*batch)
 					*batch = (*batch)[:0]
 					ticker.Reset(b.flushInterval)
 				case DropNew:
@@ -143,36 +143,22 @@ func (b *Buffer) run() {
 			*batch = append(*batch, msg)
 
 			if b.policy == BlockOnFull && len(*batch) >= b.maxSize {
-				b.emit(*batch, false)
+				b.emit(*batch)
 				*batch = (*batch)[:0]
 				ticker.Reset(b.flushInterval)
 			}
 
 		case <-ticker.C:
-			b.flushBatch(*batch)
+			if len(*batch) > 0 {
+				b.emit(*batch)
+			}
 			*batch = (*batch)[:0]
 		}
 	}
 }
 
-// emit sends batch messages to output channel.
-// With force=true, sends all messages immediately.
-// Without force, sends with timeout (emitTimeout) and returns on timeout.
-func (b *Buffer) emit(batch [][]byte, force bool) {
+func (b *Buffer) emit(batch [][]byte) {
 	for _, msg := range batch {
-		if force {
-			b.output <- msg
-		} else {
-			select {
-			case b.output <- msg:
-			default:
-			}
-		}
-	}
-}
-
-func (b *Buffer) flushBatch(batch [][]byte) {
-	if len(batch) > 0 {
-		b.emit(batch, false)
+		b.output <- msg
 	}
 }
